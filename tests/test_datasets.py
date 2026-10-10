@@ -7,11 +7,21 @@ from vade.metrics import evaluate
 
 def test_minmax_keeps_order_and_constant_columns(tmp_path):
     raw = np.array([[-2., 7.], [0., 7.], [2., 7.]])
-    savemat(tmp_path / "test.mat", dict(data=raw, **{"class": np.array([[2, 1, 2]])}))
-    x, labels, encoded, scaler, meta = load_dataset("test", tmp_path)
+    savemat(tmp_path / "mnist.mat", dict(data=raw, **{"class": np.array([[2, 1, 2]])}))
+    x, labels, encoded, scaler, meta = load_dataset("MNIST", tmp_path)
     np.testing.assert_allclose(x, [[0, 0], [.5, 0], [1, 0]])
     np.testing.assert_array_equal(labels, [2, 1, 2])
     assert meta["n_clusters"] == 2
+
+
+def test_standard_scaler_for_continuous_datasets(tmp_path):
+    raw = np.array([[-2., 7.], [0., 7.], [2., 7.]])
+    savemat(tmp_path / "test.mat", dict(data=raw, **{"class": np.array([[2, 1, 2]])}))
+    x, labels, encoded, scaler, meta = load_dataset("test", tmp_path)
+    assert meta["reconstruction"] == "mse"
+    np.testing.assert_allclose(x[:, 1], [0, 0, 0])          # constant column -> 0
+    np.testing.assert_allclose(x[:, 0].mean(), 0.0, atol=1e-4)
+    np.testing.assert_allclose(x[:, 0].std(), 1.0, atol=1e-4)
 
 
 def test_hungarian_alignment_before_macro_f1():

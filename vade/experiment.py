@@ -16,7 +16,7 @@ from sklearn.cluster import KMeans
 from sklearn.mixture import GaussianMixture
 from threadpoolctl import threadpool_limits
 
-from .datasets import load_dataset
+from .datasets import load_dataset, reconstruction_for
 from .metrics import evaluate
 from .model import VaDE
 
@@ -79,8 +79,10 @@ def run(args):
             (output / name).unlink(missing_ok=True)
     seed_everything(args.seed, args.threads)
     device = torch.device(args.device)
+    reconstruction = reconstruction_for(args.dataset)
     config = {k: str(v) if isinstance(v, Path) else v for k, v in vars(args).items()}
     config.update(torch_version=torch.__version__, cuda_version=torch.version.cuda,
+                  reconstruction=reconstruction,
                   plotting="original features, IDEC-style scatter/t-SNE", mixture_init="historical global covariance",
                   time_scope="data loading through final predicted labels; excludes metrics and output I/O")
     write_json(output / "config.json", config)
@@ -91,7 +93,7 @@ def run(args):
     features, truth, encoded, scaler, metadata = load_dataset(args.dataset, args.data_dir)
     x = torch.from_numpy(features).to(device)
     model = VaDE(input_dim=x.shape[1], n_clusters=metadata["n_clusters"], latent_dim=args.latent_dim,
-                 hidden_dims=args.hidden_dims, reconstruction="bce", alpha=1.).to(device)
+                 hidden_dims=args.hidden_dims, reconstruction=reconstruction, alpha=1.).to(device)
     print(json.dumps(dict(stage="data", device=str(device), **metadata), ensure_ascii=False), flush=True)
     history = []
     mixture_ids = {id(p) for p in model.mixture_parameters()}
@@ -162,8 +164,13 @@ def run(args):
                fmt="%d", delimiter=",", header="sample_index,cluster_id,aligned_class_id,true_class_id", comments="")
     write_json(output / "alignment.json", dict(cluster_to_encoded_class=mapping, class_values=metadata["class_values"]))
     write_json(output / "dataset.json", metadata)
-    np.savez(output / "normalization.npz", data_min=scaler.data_min_, data_max=scaler.data_max_,
-             scale=scaler.scale_, offset=scaler.min_)
+    if reconstruction == "bce":
+        np.savez(output / "normalization.npz", scaler="minmax",
+                 data_min=scaler.data_min_, data_max=scaler.data_max_,
+                 scale=scaler.scale_, offset=scaler.min_)
+    else:
+        np.savez(output / "normalization.npz", scaler="standard",
+                 mean=scaler.mean_, scale=scaler.scale_, var=scaler.var_)
     (output / "history.jsonl").write_text("".join(json.dumps(r) + "\n" for r in history))
     torch.save(dict(model_config=model.config, model=model.state_dict(), optimizer=optimizer.state_dict(),
                     epoch=args.epochs, config=config), output / "model.pt")

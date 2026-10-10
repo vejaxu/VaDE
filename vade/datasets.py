@@ -1,11 +1,11 @@
-"""Unified DC dataset loading with feature-wise MinMax scaling."""
+"""Unified DC dataset loading with per-dataset normalization and reconstruction."""
 import pickle
 from pathlib import Path
 
 import numpy as np
 from scipy import sparse
 from scipy.io import loadmat
-from sklearn.preprocessing import MinMaxScaler
+from sklearn.preprocessing import MinMaxScaler, StandardScaler
 
 DATASETS = [
     "spiral", "AC", "4C", "RingG", "complex9", "USPS", "STL-10", "Cifar-10",
@@ -16,6 +16,15 @@ DATASETS = [
 ]
 ALIASES = {"MNIST": "mnist.mat", "dlpfc_151507": "151507_final.pkl",
            **{name: f"processed_{name}.pkl" for name in ("tutorial", "tonsil", "airway", "crohn")}}
+
+# Grayscale pixel images use Bernoulli (BCE) reconstruction + MinMax [0,1]; every other
+# dataset is continuous-valued and uses Gaussian (MSE) reconstruction + z-score
+# (StandardScaler) normalization so the reconstruction term keeps a healthy magnitude.
+BCE_DATASETS = {"MNIST", "USPS", "COIL20"}
+
+
+def reconstruction_for(name):
+    return "bce" if name in BCE_DATASETS else "mse"
 
 
 def resolve_dataset(name, data_dir):
@@ -59,11 +68,19 @@ def load_dataset(name, data_dir):
     classes, encoded = np.unique(labels, return_inverse=True)
     if len(classes) < 2:
         raise ValueError(f"{path}: fewer than two ground-truth classes")
-    scaler = MinMaxScaler()
-    features = scaler.fit_transform(raw.astype(np.float32)).clip(0, 1)
+    reconstruction = reconstruction_for(name)
+    if reconstruction == "bce":
+        scaler = MinMaxScaler()
+        features = scaler.fit_transform(raw.astype(np.float32)).clip(0, 1)
+        normalization = "feature-wise MinMax [0, 1]"
+    else:
+        scaler = StandardScaler()
+        features = scaler.fit_transform(raw.astype(np.float32))
+        normalization = "feature-wise z-score (StandardScaler)"
     metadata = dict(dataset=name, source=str(path.resolve()), feature_key=feature_key,
                     label_key=label_key, samples=len(raw), input_dim=raw.shape[1],
-                    n_clusters=len(classes), normalization="feature-wise MinMax [0, 1]",
+                    n_clusters=len(classes), normalization=normalization,
+                    reconstruction=reconstruction,
                     class_values=classes.tolist())
     return (np.ascontiguousarray(features, dtype=np.float32), labels, encoded.astype(np.int64),
             scaler, metadata)
